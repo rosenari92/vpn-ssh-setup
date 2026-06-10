@@ -14,12 +14,20 @@ $env:TS_KEY="tskey-auth-..."; irm https://raw.githubusercontent.com/rosenari92/v
 
 | 파일 | 용도 | git |
 |---|---|---|
-| `setup.ps1` | 설치/설정 스크립트 (raw URL 로 실행) | ✅ |
+| `setup.ps1` | 1회 셋업 스크립트 (raw URL 로 실행) | ✅ |
+| `update-keys.ps1` | SSH 공개키만 갱신 (재실행 안전) | ✅ |
 | `administrators_authorized_keys` | 관리자 그룹용 SSH 공개키 모음 (공개 OK) | ✅ |
-| `OpenSSH-Win64-v10.0.0.0.msi` | Win10 1809 미만 / 빌트인 capability 실패 시 fallback | ✅ |
+| `OpenSSH-Win64-v10.0.0.0.msi` | OpenSSH Server 설치파일 (리포 MSI 우선) | ✅ |
 | `tailscale-setup-1.98.4.exe` | Tailscale 설치파일 | ✅ |
+| `nssm.exe` | pms-agent 서비스 등록용 | ✅ |
 | `.env` | `TS_KEY` 보관 (로컬 메모) | ❌ |
 | `.description` | one-liner 메모 (로컬) | ❌ |
+
+## 키만 갱신 (이미 셋업된 PC)
+
+```powershell
+irm https://raw.githubusercontent.com/rosenari92/vpn-ssh-setup/main/update-keys.ps1 | iex
+```
 
 ## 셋업 흐름
 
@@ -27,6 +35,8 @@ $env:TS_KEY="tskey-auth-..."; irm https://raw.githubusercontent.com/rosenari92/v
 2. **OpenSSH Server** 설치 (빌트인 우선, 실패 시 리포 MSI) + 서비스 자동시작 + 방화벽 + 기본 셸 PowerShell
 3. **administrators_authorized_keys** → `C:\ProgramData\ssh\` 배치 + ACL (`Administrators:F`, `SYSTEM:F`)
 4. **Tailscale** 설치 → `tailscale up --auth-key=... --hostname=$COMPUTERNAME --accept-routes --accept-dns=false --unattended --reset` → 자동 업데이트 끔
+5. **nssm** → `C:\nssm\nssm.exe` 배치 + 시스템 PATH 추가
+6. **pms-agent 서비스** (nssm) — Application=`C:\pms-agent\pms-agent.exe`, AppParameters=`-config C:\pms-agent\config.yaml`, Start=Auto. 시스템 환경변수 `PMS_AGENT_MQTT_PASSWORD=efmqtt1!`. `pms-agent.exe` 가 아직 없으면 서비스만 등록되고 시작 실패는 무시.
 
 ## 수동 확인
 

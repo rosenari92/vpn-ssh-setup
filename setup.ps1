@@ -2,9 +2,11 @@
 #
 # 동작:
 #   1) $env:TS_KEY 확인 (one-liner 에서 미리 export)
-#   2) OpenSSH Server 설치 (빌트인 Add-WindowsCapability 우선, 실패 시 리포 MSI)
+#   2) OpenSSH Server 설치 (리포 MSI 우선, fallback 빌트인 capability)
 #   3) 리포의 administrators_authorized_keys 를 C:\ProgramData\ssh\ 에 배치
 #   4) Tailscale 설치 (리포의 .exe) + tailscale up --unattended --reset
+#   5) nssm 설치 (C:\nssm) + PATH 등록 + pms-agent 서비스 등록
+#      + 시스템 환경변수 PMS_AGENT_MQTT_PASSWORD
 #
 # 실행: 관리자 PowerShell 에서 .description 의 one-liner 사용 (TS_KEY 포함).
 
@@ -87,8 +89,47 @@ $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
 & $tsExe up --auth-key="$tsAuthKey" --hostname="$env:COMPUTERNAME" --accept-routes --accept-dns=$false --unattended --reset
 try { & $tsExe set --auto-update=false } catch { Write-Host "    (auto-update 끔 미지원 — 무시)" -ForegroundColor DarkGray }
 
+# ── 5. nssm 설치 (C:\nssm) + PATH 추가 ─────────────────────────────
+Write-Host "==> nssm 설치 (C:\nssm)..." -ForegroundColor Cyan
+$nssmDir = "C:\nssm"
+$nssmExe = "$nssmDir\nssm.exe"
+New-Item -ItemType Directory -Path $nssmDir -Force | Out-Null
+Invoke-WebRequest -UseBasicParsing "$base/nssm.exe" -OutFile $nssmExe
+# 시스템 PATH 에 C:\nssm 등록 (이미 있으면 skip)
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+if (($machinePath -split ';') -notcontains $nssmDir) {
+  [Environment]::SetEnvironmentVariable("Path", "$machinePath;$nssmDir", "Machine")
+  Write-Host "    PATH 에 $nssmDir 추가" -ForegroundColor Yellow
+}
+$env:Path = $env:Path + ";$nssmDir"
+
+# ── 6. pms-agent 서비스 등록 (nssm) + 환경변수 ──────────────────────
+Write-Host "==> pms-agent 서비스 등록..." -ForegroundColor Cyan
+$svcName = "pms-agent"
+$svcApp  = "C:\pms-agent\pms-agent.exe"
+$svcArgs = "-config C:\pms-agent\config.yaml"
+# 기존 서비스 있으면 한 번 정지 후 재설정 (idempotent)
+if (Get-Service $svcName -EA SilentlyContinue) {
+  Write-Host "    이미 등록됨 — 재설정" -ForegroundColor DarkGray
+  & $nssmExe stop  $svcName 2>$null | Out-Null
+  & $nssmExe set   $svcName Application $svcApp     | Out-Null
+  & $nssmExe set   $svcName AppParameters $svcArgs  | Out-Null
+} else {
+  & $nssmExe install $svcName $svcApp $svcArgs      | Out-Null
+}
+& $nssmExe set $svcName Start SERVICE_AUTO_START    | Out-Null
+& $nssmExe set $svcName AppDirectory "C:\pms-agent" | Out-Null
+
+# 시스템 환경변수 PMS_AGENT_MQTT_PASSWORD
+[Environment]::SetEnvironmentVariable("PMS_AGENT_MQTT_PASSWORD", "efmqtt1!", "Machine")
+$env:PMS_AGENT_MQTT_PASSWORD = "efmqtt1!"
+Write-Host "    PMS_AGENT_MQTT_PASSWORD 환경변수 등록 (Machine scope)" -ForegroundColor Yellow
+
+# 서비스 시작은 운영자가 pms-agent.exe 배포 후 직접 (nssm start pms-agent)
+
 # ── 결과 ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== 완료 ===" -ForegroundColor Green
 Write-Host ("sshd      : " + (Get-Service sshd).Status)
+Write-Host ("pms-agent : " + (Get-Service $svcName -EA SilentlyContinue).Status)
 & $tsExe status | Select-Object -First 3
