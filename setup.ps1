@@ -54,12 +54,6 @@ if (-not (Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -EA SilentlyContinue
     -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
 }
 
-# 기본 셸 = PowerShell
-New-Item -Path "HKLM:\SOFTWARE\OpenSSH" -Force | Out-Null
-New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Force `
-  -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
-  -PropertyType String | Out-Null
-
 # ── 3. administrators_authorized_keys 배치 ─────────────────────────
 # Windows OpenSSH 는 관리자 그룹 멤버의 키를 ProgramData\ssh\administrators_authorized_keys
 # 에서만 읽음 (sshd_config 의 Match Group administrators 룰).
