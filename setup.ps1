@@ -28,22 +28,23 @@ if (-not $tsAuthKey) {
   throw "환경변수 TS_KEY 미설정 — `$env:TS_KEY='tskey-...'; irm <url>/setup.ps1 | iex` 형태로 실행하세요."
 }
 
-# ── 2. OpenSSH Server 설치 (빌트인 우선, 실패 시 리포 MSI) ──────────
+# ── 2. OpenSSH Server 설치 (리포 MSI 우선, 실패 시 빌트인 capability) ─
 Write-Host "==> OpenSSH Server 설치..." -ForegroundColor Cyan
-$installed = $false
-try {
-  $cap = Get-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -EA Stop
-  if ($cap.State -ne "Installed") {
+if (Get-Service sshd -EA SilentlyContinue) {
+  Write-Host "    이미 설치됨 — skip" -ForegroundColor DarkGray
+} else {
+  $installed = $false
+  try {
+    $msi = "$tmp\OpenSSH-Win64.msi"
+    Invoke-WebRequest -UseBasicParsing "$base/OpenSSH-Win64-v10.0.0.0.msi" -OutFile $msi
+    Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /qn /norestart ADDLOCAL=Server"
+    $installed = $true
+  } catch {
+    Write-Host "    리포 MSI 실패 — 빌트인 capability fallback..." -ForegroundColor Yellow
+  }
+  if (-not $installed) {
     Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
   }
-  $installed = $true
-} catch {
-  Write-Host "    빌트인 capability 없음 — MSI 다운로드..." -ForegroundColor Yellow
-}
-if (-not $installed) {
-  $msi = "$tmp\OpenSSH-Win64.msi"
-  Invoke-WebRequest -UseBasicParsing "$base/OpenSSH-Win64-v10.0.0.0.msi" -OutFile $msi
-  Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msi`" /qn /norestart ADDLOCAL=Server"
 }
 Set-Service -Name sshd -StartupType Automatic
 Start-Service sshd
