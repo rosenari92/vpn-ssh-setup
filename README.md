@@ -4,10 +4,10 @@
 
 ## 사용법
 
-각 PC 에서 **관리자 PowerShell** 열고 한 줄 실행 (TS_KEY 는 발급받은 값으로 교체):
+각 PC 에서 **관리자 PowerShell** 열고 한 줄 실행 (TS_KEY / MQTT 비밀번호는 발급받은 값으로 교체):
 
 ```powershell
-$env:TS_KEY="tskey-auth-..."; irm https://raw.githubusercontent.com/rosenari92/vpn-ssh-setup/main/setup.ps1 | iex
+$env:TS_KEY="tskey-auth-..."; $env:PMS_AGENT_MQTT_PASSWORD="..."; irm https://raw.githubusercontent.com/rosenari92/vpn-ssh-setup/main/setup.ps1 | iex
 ```
 
 ## 구성

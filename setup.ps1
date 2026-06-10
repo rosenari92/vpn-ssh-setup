@@ -1,7 +1,7 @@
 # setup.ps1 — 신규 Windows PC 1회 셋업.
 #
 # 동작:
-#   1) $env:TS_KEY 확인 (one-liner 에서 미리 export)
+#   1) $env:TS_KEY / $env:PMS_AGENT_MQTT_PASSWORD 확인 (one-liner 에서 미리 export)
 #   2) OpenSSH Server 설치 (리포 MSI 우선, fallback 빌트인 capability)
 #   3) 리포의 administrators_authorized_keys 를 C:\ProgramData\ssh\ 에 배치
 #   4) Tailscale 설치 (리포의 .exe) + tailscale up --unattended --reset
@@ -23,10 +23,14 @@ New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
 Write-Host "==> host=$env:COMPUTERNAME user=$env:USERNAME" -ForegroundColor Cyan
 
-# ── 1. TS_KEY 확인 (one-liner 에서 $env:TS_KEY 로 전달) ─────────────
+# ── 1. 환경변수 확인 (one-liner 에서 미리 export) ──────────────────
 $tsAuthKey = $env:TS_KEY
+$mqttPwd   = $env:PMS_AGENT_MQTT_PASSWORD
 if (-not $tsAuthKey) {
-  throw "환경변수 TS_KEY 미설정 — `$env:TS_KEY='tskey-...'; irm <url>/setup.ps1 | iex` 형태로 실행하세요."
+  throw "환경변수 TS_KEY 미설정 — `$env:TS_KEY='tskey-...' 필요"
+}
+if (-not $mqttPwd) {
+  throw "환경변수 PMS_AGENT_MQTT_PASSWORD 미설정 — `$env:PMS_AGENT_MQTT_PASSWORD='...' 필요"
 }
 
 # ── 2. OpenSSH Server 설치 (리포 MSI 우선, 실패 시 빌트인 capability) ─
@@ -114,9 +118,8 @@ if (Get-Service $svcName -EA SilentlyContinue) {
 & $nssmExe set $svcName Start SERVICE_AUTO_START    | Out-Null
 & $nssmExe set $svcName AppDirectory "C:\pms-agent" | Out-Null
 
-# 시스템 환경변수 PMS_AGENT_MQTT_PASSWORD
-[Environment]::SetEnvironmentVariable("PMS_AGENT_MQTT_PASSWORD", "efmqtt1!", "Machine")
-$env:PMS_AGENT_MQTT_PASSWORD = "efmqtt1!"
+# 시스템 환경변수 PMS_AGENT_MQTT_PASSWORD (one-liner 의 값을 Machine scope 으로 영속화)
+[Environment]::SetEnvironmentVariable("PMS_AGENT_MQTT_PASSWORD", $mqttPwd, "Machine")
 Write-Host "    PMS_AGENT_MQTT_PASSWORD 환경변수 등록 (Machine scope)" -ForegroundColor Yellow
 
 # 서비스 시작은 운영자가 pms-agent.exe 배포 후 직접 (nssm start pms-agent)
