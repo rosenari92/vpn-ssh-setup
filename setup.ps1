@@ -1,13 +1,13 @@
 # setup.ps1 — 신규 Windows PC 1회 셋업.
 #
 # 동작:
-#   1) .env 다운로드 → TS_KEY 추출
+#   1) $env:TS_KEY 확인 (one-liner 에서 미리 export)
 #   2) OpenSSH Server 설치 (빌트인 Add-WindowsCapability 우선, 실패 시 리포 MSI)
 #   3) 리포의 administrators_authorized_keys 를 C:\ProgramData\ssh\ 에 배치
 #   4) Tailscale 설치 (리포의 .exe) + tailscale up --unattended --reset
 #   5) 절전 끔 (PMS PC 안정성)
 #
-# 실행: 관리자 PowerShell 에서 .description 의 one-liner 사용.
+# 실행: 관리자 PowerShell 에서 .description 의 one-liner 사용 (TS_KEY 포함).
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -22,14 +22,11 @@ New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
 Write-Host "==> host=$env:COMPUTERNAME user=$env:USERNAME" -ForegroundColor Cyan
 
-# ── 1. .env 받아서 TS_KEY 추출 ──────────────────────────────────────
-Write-Host "==> .env 로드..." -ForegroundColor Cyan
-$envText = (Invoke-WebRequest -UseBasicParsing "$base/.env").Content
-$tsAuthKey = ""
-foreach ($line in ($envText -split "`r?`n")) {
-  if ($line -match '^\s*TS_KEY\s*=\s*(.+)$') { $tsAuthKey = $matches[1].Trim().Trim('"') }
+# ── 1. TS_KEY 확인 (one-liner 에서 $env:TS_KEY 로 전달) ─────────────
+$tsAuthKey = $env:TS_KEY
+if (-not $tsAuthKey) {
+  throw "환경변수 TS_KEY 미설정 — `$env:TS_KEY='tskey-...'; irm <url>/setup.ps1 | iex` 형태로 실행하세요."
 }
-if (-not $tsAuthKey) { throw ".env 에 TS_KEY 없음." }
 
 # ── 2. OpenSSH Server 설치 (빌트인 우선, 실패 시 리포 MSI) ──────────
 Write-Host "==> OpenSSH Server 설치..." -ForegroundColor Cyan
