@@ -87,6 +87,9 @@ $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
 & $tsExe up --auth-key="$tsAuthKey" --hostname="$env:COMPUTERNAME" --accept-routes --accept-dns=$false --unattended --reset
 try { & $tsExe set --auto-update=false } catch { Write-Host "    (auto-update 끔 미지원 — 무시)" -ForegroundColor DarkGray }
 
+# ── 6. 임시 다운로드 정리 ──────────────────────────────────────────
+Remove-Item -Path $tmp -Recurse -Force -EA SilentlyContinue
+
 # ── 결과 ───────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== 완료 ===" -ForegroundColor Green
