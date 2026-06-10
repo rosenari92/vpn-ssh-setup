@@ -74,7 +74,8 @@ if (-not (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) {
   Write-Host "==> Tailscale 설치..." -ForegroundColor Cyan
   $tsInst = "$tmp\tailscale-setup.exe"
   Invoke-WebRequest -UseBasicParsing "$base/tailscale-setup-1.98.4.exe" -OutFile $tsInst
-  Start-Process $tsInst -Wait -ArgumentList "/quiet"
+  # NSIS 기반 installer — silent 옵션은 /S (대문자). /quiet 안 먹어서 GUI 다이얼로그 뒤에 떠 멈춤.
+  Start-Process $tsInst -Wait -ArgumentList "/S"
   $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
               [Environment]::GetEnvironmentVariable("Path","User")
 } else {
