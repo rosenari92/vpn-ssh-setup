@@ -5,7 +5,6 @@
 #   2) OpenSSH Server 설치 (빌트인 Add-WindowsCapability 우선, 실패 시 리포 MSI)
 #   3) 리포의 administrators_authorized_keys 를 C:\ProgramData\ssh\ 에 배치
 #   4) Tailscale 설치 (리포의 .exe) + tailscale up --unattended --reset
-#   5) 절전 끔 (PMS PC 안정성)
 #
 # 실행: 관리자 PowerShell 에서 .description 의 one-liner 사용 (TS_KEY 포함).
 
@@ -87,12 +86,6 @@ Write-Host "==> Tailscale up (hostname=$env:COMPUTERNAME)..." -ForegroundColor C
 $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
 & $tsExe up --auth-key="$tsAuthKey" --hostname="$env:COMPUTERNAME" --accept-routes --accept-dns=$false --unattended --reset
 try { & $tsExe set --auto-update=false } catch { Write-Host "    (auto-update 끔 미지원 — 무시)" -ForegroundColor DarkGray }
-
-# ── 6. 절전 끔 ─────────────────────────────────────────────────────
-Write-Host "==> 절전 끔..." -ForegroundColor Cyan
-powercfg /change standby-timeout-ac 0
-powercfg /change hibernate-timeout-ac 0
-powercfg /change monitor-timeout-ac 0
 
 # ── 결과 ───────────────────────────────────────────────────────────
 Write-Host ""

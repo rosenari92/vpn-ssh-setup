@@ -27,7 +27,6 @@ $env:TS_KEY="tskey-auth-..."; irm https://raw.githubusercontent.com/rosenari92/v
 2. **OpenSSH Server** 설치 (빌트인 우선, 실패 시 리포 MSI) + 서비스 자동시작 + 방화벽 + 기본 셸 PowerShell
 3. **administrators_authorized_keys** → `C:\ProgramData\ssh\` 배치 + ACL (`Administrators:F`, `SYSTEM:F`)
 4. **Tailscale** 설치 → `tailscale up --auth-key=... --hostname=$COMPUTERNAME --accept-routes --accept-dns=false --unattended --reset` → 자동 업데이트 끔
-5. 절전/모니터/대기 timeout = 0 (AC)
 
 ## 수동 확인
 
