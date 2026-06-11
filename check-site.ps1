@@ -137,33 +137,29 @@ if ($Network) {
         Stop-NetEventSession $sessionName
         Remove-NetEventSession $sessionName
 
-        # tracerpt 로 XML 변환
-        & tracerpt $etl -o $xml -of XML -y -lr 2>&1 | Out-Null
-
-        if (-not (Test-Path $xml)) {
-            Write-Host "  (ETW XML 생성 실패)"
+        # Get-WinEvent 로 .etl 파일 직접 읽기 (tracerpt 우회 — manifest 자동, 더 안정적)
+        $events = @(Get-WinEvent -Path $etl -Oldest -EA SilentlyContinue)
+        if (-not $events -or $events.Count -eq 0) {
+            Write-Host ("  (.etl 파일 비어있음. size=" + (Get-Item $etl).Length + ")")
         } else {
-            # XML 파싱 — 이벤트 ID 별 Send/Recv 분류 (TCP: 10/11, UDP: 26/27)
+            Write-Host ("  (events=" + $events.Count + ") 분석 중...")
+            # 이벤트 ID 별 Send/Recv 분류 (TCP: 10/11, UDP: 26/27)
             $sendIds = @(10, 26)
             $recvIds = @(11, 27)
-            $procName = @{}   # PID → ProcessName 캐시
-            $stats    = @{}   # PID → @{Send=long; Recv=long}
+            $procName = @{}
+            $stats    = @{}
 
-            [xml]$doc = Get-Content $xml -Raw -EA SilentlyContinue
-            if ($doc -and $doc.Events) {
-                foreach ($ev in $doc.Events.Event) {
-                    $eid = [int]$ev.System.EventID
-                    if (-not ($sendIds + $recvIds -contains $eid)) { continue }
-                    $procId = [int]$ev.System.Execution.ProcessID
-                    # EventData 의 size 필드
-                    $sizeNode = $ev.RenderingInfo.EventData.Data | Where-Object { $_.Name -eq "size" }
-                    if (-not $sizeNode) { $sizeNode = $ev.EventData.Data | Where-Object { $_.Name -eq "size" } }
-                    $size = if ($sizeNode) { [long]$sizeNode.'#text' } else { 0 }
+            foreach ($e in $events) {
+                if ($e.ProviderName -ne "Microsoft-Windows-Kernel-Network") { continue }
+                $eid = [int]$e.Id
+                if (-not (($sendIds + $recvIds) -contains $eid)) { continue }
+                $procId = [int]$e.ProcessId
+                # Kernel-Network 의 Send/Recv 이벤트는 첫 property 가 size (bytes)
+                $size = if ($e.Properties.Count -gt 0) { try { [long]$e.Properties[0].Value } catch { 0 } } else { 0 }
 
-                    if (-not $stats.ContainsKey($procId)) { $stats[$procId] = @{Send=[long]0; Recv=[long]0} }
-                    if ($sendIds -contains $eid) { $stats[$procId].Send += $size }
-                    else                         { $stats[$procId].Recv += $size }
-                }
+                if (-not $stats.ContainsKey($procId)) { $stats[$procId] = @{Send=[long]0; Recv=[long]0} }
+                if ($sendIds -contains $eid) { $stats[$procId].Send += $size }
+                else                         { $stats[$procId].Recv += $size }
             }
 
             $netReport = $stats.Keys | ForEach-Object {
@@ -199,6 +195,6 @@ if ($Network) {
         # cleanup
         Stop-NetEventSession   $sessionName -EA SilentlyContinue
         Remove-NetEventSession $sessionName -EA SilentlyContinue
-        Remove-Item $etl, $xml -Force -EA SilentlyContinue
+        Remove-Item $etl -Force -EA SilentlyContinue
     }
 }
