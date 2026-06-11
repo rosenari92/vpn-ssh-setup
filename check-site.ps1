@@ -47,20 +47,40 @@ $Disks = Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object 
 }
 
 # ── 4) 프로세스별 자원 집계 (임계 이상만) ───────────────────────────
+# IOOtherBytesPersec 는 컨트롤 ops (네트워크 X). 디스크/파일 IO 는 IODataBytesPersec.
 $Report = $ProcData | Where-Object {
     $_.Name -notmatch "^(_Total|Idle|System|Memory Compression)$"
 } | ForEach-Object {
     # PercentProcessorTime 은 전체 코어 합산 (0~CoreCount*100). 단일 코어 환산.
-    $CpuPct = [Math]::Round([double]$_.PercentProcessorTime / $CoreCount, 1)
-    $MemMB  = [Math]::Round([double]$_.WorkingSetPrivate / 1MB, 1)
-    $IoKBs  = [Math]::Round([double]$_.IOOtherBytesPersec / 1KB, 2)
+    $CpuPct  = [Math]::Round([double]$_.PercentProcessorTime / $CoreCount, 1)
+    $MemMB   = [Math]::Round([double]$_.WorkingSetPrivate / 1MB, 1)
+    $DiskKBs = [Math]::Round([double]$_.IODataBytesPersec / 1KB, 2)
 
-    if ($CpuPct -gt 0.5 -or $MemMB -gt 10 -or $IoKBs -gt 1) {
+    if ($CpuPct -gt 0.5 -or $MemMB -gt 10 -or $DiskKBs -gt 1) {
         New-Object PSObject -Property @{
-            "Process"  = $_.Name
-            "CPU(%)"   = $CpuPct
-            "Mem(MB)"  = $MemMB
-            "IO(KB/s)" = $IoKBs
+            "Process"    = $_.Name
+            "CPU(%)"     = $CpuPct
+            "Mem(MB)"    = $MemMB
+            "Disk(KB/s)" = $DiskKBs
+        }
+    }
+}
+
+# ── 5) 네트워크 인터페이스 송수신 (KB/s) ────────────────────────────
+# 프로세스 단위 네트워크는 표준 Performance Counter 에 없음 (ETW 등 별도 필요) —
+# 여기선 인터페이스 단위 송수신 합산. Loopback/Teredo/isatap 등 가상은 제외.
+$NetData = Get-WmiObject Win32_PerfFormattedData_Tcpip_NetworkInterface
+$NetReport = $NetData | Where-Object {
+    $_.Name -notmatch "(?i)isatap|Loopback|Teredo|Pseudo"
+} | ForEach-Object {
+    $down = [Math]::Round([double]$_.BytesReceivedPersec / 1KB, 2)
+    $up   = [Math]::Round([double]$_.BytesSentPersec / 1KB, 2)
+    # 트래픽 거의 0 인 인터페이스 제외 (down + up < 0.1 KB/s)
+    if (($down + $up) -gt 0.1) {
+        New-Object PSObject -Property @{
+            "Interface"  = $_.Name
+            "Down(KB/s)" = $down
+            "Up(KB/s)"   = $up
         }
     }
 }
@@ -81,7 +101,13 @@ Write-Host "================ Disks ================="
 ($Disks | Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
 
 Write-Host ""
-Write-Host "================ Top Processes (CPU > 0.5% / Mem > 10MB / IO > 1KB/s) ================"
+Write-Host "================ Network Interfaces (Down+Up > 0.1 KB/s) ================"
+($NetReport | Sort-Object @{Expression={[double]$_."Down(KB/s)" + [double]$_."Up(KB/s)"}; Descending=$true} |
+    Select-Object Interface, "Down(KB/s)", "Up(KB/s)" |
+    Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
+
+Write-Host ""
+Write-Host "================ Top Processes (CPU > 0.5% / Mem > 10MB / Disk > 1KB/s) ================"
 ($Report | Sort-Object "CPU(%)" -Descending | Select-Object -First 25 |
-    Select-Object Process, "CPU(%)", "Mem(MB)", "IO(KB/s)" |
+    Select-Object Process, "CPU(%)", "Mem(MB)", "Disk(KB/s)" |
     Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
