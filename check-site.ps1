@@ -120,6 +120,12 @@ Write-Host "================ Top Processes (CPU > 0.5% / Mem > 10MB / Disk > 1KB
 if ($Network) {
     Write-Host ""
     Write-Host "================ Network by Process (ETW Kernel-Network, 5s capture) ================"
+    # NetEventSession cmdlet 은 Windows 8.1 (Build 9600) / Server 2012 R2 부터.
+    # Win7 / Win8 RTM 에서는 모듈 자체 부재 → skip.
+    if ([int]$OS.BuildNumber -lt 9600) {
+        Write-Host ("  (skip) NetEventSession 미지원 — Windows 8.1(Build 9600)+ 필요. 현재 Build " + $OS.BuildNumber)
+        return
+    }
     $sessionName = "ChkSiteNet"
     $etl = "$env:TEMP\$sessionName.etl"
     $xml = "$env:TEMP\$sessionName.xml"
