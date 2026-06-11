@@ -10,6 +10,10 @@
 #     * New-Object PSObject (PSCustomObject 리터럴은 PS 3.0+)
 #   - 단 vpn-ssh-setup 으로 SSH 셋업이 안 되는 Win7 은 사실상 접근 불가.
 
+param(
+    [switch]$Network   # 켜면 ETW(Kernel-Network) 5초 캡처로 프로세스별 송수신 KB 표시
+)
+
 $ErrorActionPreference = "SilentlyContinue"
 # 한글 윈도우 기본 cp949 → ssh stdout UTF-8 로 받기 위해 강제
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
@@ -111,3 +115,90 @@ Write-Host "================ Top Processes (CPU > 0.5% / Mem > 10MB / Disk > 1KB
 ($Report | Sort-Object "CPU(%)" -Descending | Select-Object -First 25 |
     Select-Object Process, "CPU(%)", "Mem(MB)", "Disk(KB/s)" |
     Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
+
+# ── 6) [-Network] ETW Kernel-Network 5초 캡처 → 프로세스별 송수신 KB ──
+if ($Network) {
+    Write-Host ""
+    Write-Host "================ Network by Process (ETW Kernel-Network, 5s capture) ================"
+    $sessionName = "ChkSiteNet"
+    $etl = "$env:TEMP\$sessionName.etl"
+    $xml = "$env:TEMP\$sessionName.xml"
+    try {
+        # 이전 세션 잔재 정리
+        Stop-NetEventSession   $sessionName -EA SilentlyContinue
+        Remove-NetEventSession $sessionName -EA SilentlyContinue
+        Remove-Item $etl, $xml -Force -EA SilentlyContinue
+
+        # 세션 + provider + 5초 캡처
+        New-NetEventSession -Name $sessionName -LocalFilePath $etl -CaptureMode SaveToFile -EA Stop | Out-Null
+        Add-NetEventProvider -Name "Microsoft-Windows-Kernel-Network" -SessionName $sessionName -EA Stop | Out-Null
+        Start-NetEventSession $sessionName
+        Start-Sleep -Seconds 5
+        Stop-NetEventSession $sessionName
+        Remove-NetEventSession $sessionName
+
+        # tracerpt 로 XML 변환
+        & tracerpt $etl -o $xml -of XML -y -lr 2>&1 | Out-Null
+
+        if (-not (Test-Path $xml)) {
+            Write-Host "  (ETW XML 생성 실패)"
+        } else {
+            # XML 파싱 — 이벤트 ID 별 Send/Recv 분류 (TCP: 10/11, UDP: 26/27)
+            $sendIds = @(10, 26)
+            $recvIds = @(11, 27)
+            $procName = @{}   # PID → ProcessName 캐시
+            $stats    = @{}   # PID → @{Send=long; Recv=long}
+
+            [xml]$doc = Get-Content $xml -Raw -EA SilentlyContinue
+            if ($doc -and $doc.Events) {
+                foreach ($ev in $doc.Events.Event) {
+                    $eid = [int]$ev.System.EventID
+                    if (-not ($sendIds + $recvIds -contains $eid)) { continue }
+                    $procId = [int]$ev.System.Execution.ProcessID
+                    # EventData 의 size 필드
+                    $sizeNode = $ev.RenderingInfo.EventData.Data | Where-Object { $_.Name -eq "size" }
+                    if (-not $sizeNode) { $sizeNode = $ev.EventData.Data | Where-Object { $_.Name -eq "size" } }
+                    $size = if ($sizeNode) { [long]$sizeNode.'#text' } else { 0 }
+
+                    if (-not $stats.ContainsKey($procId)) { $stats[$procId] = @{Send=[long]0; Recv=[long]0} }
+                    if ($sendIds -contains $eid) { $stats[$procId].Send += $size }
+                    else                         { $stats[$procId].Recv += $size }
+                }
+            }
+
+            $netReport = $stats.Keys | ForEach-Object {
+                $procId = $_
+                if (-not $procName.ContainsKey($procId)) {
+                    $p = Get-Process -Id $procId -EA SilentlyContinue
+                    $procName[$procId] = if ($p) { $p.ProcessName } else { "PID:$procId" }
+                }
+                $sendKB = [Math]::Round($stats[$procId].Send / 1024 / 5, 2)   # 5초 → /s
+                $recvKB = [Math]::Round($stats[$procId].Recv / 1024 / 5, 2)
+                if ($sendKB -gt 0.05 -or $recvKB -gt 0.05) {
+                    New-Object PSObject -Property @{
+                        Process    = $procName[$procId]
+                        PID        = $procId
+                        "Down(KB/s)" = $recvKB
+                        "Up(KB/s)"   = $sendKB
+                    }
+                }
+            }
+
+            if ($netReport) {
+                ($netReport |
+                    Sort-Object @{Expression={[double]$_."Down(KB/s)" + [double]$_."Up(KB/s)"}; Descending=$true} |
+                    Select-Object -First 20 Process, PID, "Down(KB/s)", "Up(KB/s)" |
+                    Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
+            } else {
+                Write-Host "  (캡처 기간 동안 트래픽 거의 없음)"
+            }
+        }
+    } catch {
+        Write-Host ("  ETW 캡처 실패: " + $_.Exception.Message)
+    } finally {
+        # cleanup
+        Stop-NetEventSession   $sessionName -EA SilentlyContinue
+        Remove-NetEventSession $sessionName -EA SilentlyContinue
+        Remove-Item $etl, $xml -Force -EA SilentlyContinue
+    }
+}
