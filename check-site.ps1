@@ -149,6 +149,25 @@ if ($Network) {
             Write-Host ("  (.etl 파일 비어있음. size=" + (Get-Item $etl).Length + ")")
         } else {
             Write-Host ("  (events=" + $events.Count + ") 분석 중...")
+            # 디버그: Event ID 분포 + 샘플 properties (한 번만 — 이상 발견 시 분석용)
+            if ($env:CHKSITE_DEBUG -eq '1') {
+                Write-Host "--- DEBUG: Event ID 분포 (Kernel-Network 만) ---"
+                ($events | Where-Object { $_.ProviderName -eq "Microsoft-Windows-Kernel-Network" } |
+                    Group-Object Id | Sort-Object Count -Descending |
+                    Select-Object Count, Name | Format-Table | Out-String).TrimEnd() | Write-Host
+                foreach ($dbgId in @(10, 11, 26, 27)) {
+                    $sample = $events | Where-Object { $_.ProviderName -eq "Microsoft-Windows-Kernel-Network" -and $_.Id -eq $dbgId } | Select-Object -First 1
+                    if ($sample) {
+                        Write-Host ("--- DEBUG: Id=$dbgId sample (PID=" + $sample.ProcessId + ", PropCount=" + $sample.Properties.Count + ") ---")
+                        for ($i=0; $i -lt $sample.Properties.Count; $i++) {
+                            $v = $sample.Properties[$i].Value
+                            $t = if ($v) { $v.GetType().Name } else { "null" }
+                            Write-Host ("  [" + $i + "] " + $t + " = " + $v)
+                        }
+                    }
+                }
+                Write-Host "--- END DEBUG ---"
+            }
             # 이벤트 ID 별 Send/Recv 분류 (TCP: 10/11, UDP: 26/27)
             $sendIds = @(10, 26)
             $recvIds = @(11, 27)
