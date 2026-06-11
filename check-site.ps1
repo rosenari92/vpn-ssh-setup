@@ -174,13 +174,18 @@ if ($Network) {
             $procName = @{}
             $stats    = @{}
 
+            # Kernel-Network 의 Send/Recv 이벤트 properties:
+            #   [0] PID (uint32) — $e.ProcessId 는 캡처 컨텍스트(Idle=0) 라 부정확. Properties[0] 사용.
+            #   [1] size (uint32, bytes)
+            #   [2~] daddr/saddr/dport/sport 등
             foreach ($e in $events) {
                 if ($e.ProviderName -ne "Microsoft-Windows-Kernel-Network") { continue }
                 $eid = [int]$e.Id
                 if (-not (($sendIds + $recvIds) -contains $eid)) { continue }
-                $procId = [int]$e.ProcessId
-                # Kernel-Network 의 Send/Recv 이벤트는 첫 property 가 size (bytes)
-                $size = if ($e.Properties.Count -gt 0) { try { [long]$e.Properties[0].Value } catch { 0 } } else { 0 }
+                if ($e.Properties.Count -lt 2) { continue }
+                $procId = try { [int]$e.Properties[0].Value } catch { 0 }
+                $size   = try { [long]$e.Properties[1].Value } catch { 0 }
+                if ($procId -le 0 -or $size -le 0) { continue }
 
                 if (-not $stats.ContainsKey($procId)) { $stats[$procId] = @{Send=[long]0; Recv=[long]0} }
                 if ($sendIds -contains $eid) { $stats[$procId].Send += $size }
