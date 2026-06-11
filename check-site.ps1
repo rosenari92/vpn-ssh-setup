@@ -1,4 +1,4 @@
-# site-resource.ps1 — 사이트(현장 PC)의 자원 상태 한 번에 보기.
+﻿# site-resource.ps1 — 사이트(현장 PC)의 자원 상태 한 번에 보기.
 #
 # 출력:
 #   - 시스템 요약: hostname / OS / uptime / CPU 평균 / 메모리 사용률 / 디스크
@@ -174,10 +174,10 @@ if ($Network) {
             $procName = @{}
             $stats    = @{}
 
-            # Kernel-Network 의 Send/Recv 이벤트 properties:
-            #   [0] PID (uint32) — $e.ProcessId 는 캡처 컨텍스트(Idle=0) 라 부정확. Properties[0] 사용.
+            # Kernel-Network Send/Recv event properties:
+            #   [0] PID (uint32) - $e.ProcessId is capture-context PID (Idle=0); use Properties[0].
             #   [1] size (uint32, bytes)
-            #   [2~] daddr/saddr/dport/sport 등
+            #   [2~] daddr/saddr/dport/sport etc.
             foreach ($e in $events) {
                 if ($e.ProviderName -ne "Microsoft-Windows-Kernel-Network") { continue }
                 $eid = [int]$e.Id
