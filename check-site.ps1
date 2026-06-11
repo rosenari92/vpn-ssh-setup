@@ -183,8 +183,8 @@ if ($Network) {
                 $eid = [int]$e.Id
                 if (-not (($sendIds + $recvIds) -contains $eid)) { continue }
                 if ($e.Properties.Count -lt 2) { continue }
-                $procId = try { [int]$e.Properties[0].Value } catch { 0 }
-                $size   = try { [long]$e.Properties[1].Value } catch { 0 }
+                $procId = [int]($e.Properties[0].Value)
+                $size   = [long]($e.Properties[1].Value)
                 if ($procId -le 0 -or $size -le 0) { continue }
 
                 if (-not $stats.ContainsKey($procId)) { $stats[$procId] = @{Send=[long]0; Recv=[long]0} }
