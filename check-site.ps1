@@ -250,46 +250,60 @@ if ($Internet) {
         Write-Host ("  Latency : FAILED (" + $_.Exception.Message + ")")
     }
 
-    # download — 5초 time-based stream (HttpWebRequest + chunked read)
-    # 큰 endpoint(100MB) 요청하고 5초만 받음 → 빠른 회선이면 많이 받고, 느린 회선이면 부분만.
-    try {
-        $downSecs = 5
-        $req = [System.Net.HttpWebRequest]::Create("https://speed.cloudflare.com/__down?bytes=104857600")
-        $req.Method = "GET"
-        $req.Timeout = ($downSecs + 5) * 1000        # connect/header timeout
-        $req.ReadWriteTimeout = ($downSecs + 5) * 1000
-        $req.AllowAutoRedirect = $true
-        $resp = $req.GetResponse()
-        $stream = $resp.GetResponseStream()
-        $buf = New-Object byte[] 65536
-        $total = [long]0
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        while ($sw.Elapsed.TotalSeconds -lt $downSecs) {
-            $n = $stream.Read($buf, 0, $buf.Length)
-            if ($n -le 0) { break }
-            $total += $n
+    # download — 5초 time-based stream. UA 명시(빈 UA 차단 회피), fail 시 endpoint fallback.
+    # 1순위: cloudflare(anycast 라 가까운 노드 자동) → 2순위: hetzner 정적 100MB → 3순위: tele2
+    $downSecs = 5
+    $downEndpoints = @(
+        "https://speed.cloudflare.com/__down?bytes=26214400",
+        "https://speed.hetzner.de/100MB.bin",
+        "https://speedtest.tele2.net/100MB.zip"
+    )
+    $downOk = $false
+    foreach ($url in $downEndpoints) {
+        $epHost = ($url -split "/")[2]
+        try {
+            $req = [System.Net.HttpWebRequest]::Create($url)
+            $req.Method = "GET"
+            $req.UserAgent = "Mozilla/5.0 check-site.ps1"
+            $req.Accept = "*/*"
+            $req.Timeout = ($downSecs + 5) * 1000        # connect/header timeout
+            $req.ReadWriteTimeout = ($downSecs + 5) * 1000
+            $req.AllowAutoRedirect = $true
+            $resp = $req.GetResponse()
+            $stream = $resp.GetResponseStream()
+            $buf = New-Object byte[] 65536
+            $total = [long]0
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($sw.Elapsed.TotalSeconds -lt $downSecs) {
+                $n = $stream.Read($buf, 0, $buf.Length)
+                if ($n -le 0) { break }
+                $total += $n
+            }
+            $sw.Stop()
+            try { $stream.Close() } catch {}
+            try { $resp.Close() } catch {}
+            $secs = $sw.Elapsed.TotalSeconds
+            if ($secs -le 0) { $secs = 0.001 }
+            $mbps = [Math]::Round(($total * 8) / 1MB / $secs, 1)
+            $mb   = [Math]::Round($total / 1MB, 2)
+            $secF = [Math]::Round($secs, 1)
+            Write-Host ("  Download: " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s via " + $epHost + ")")
+            $downOk = $true
+            break
+        } catch {
+            Write-Host ("  Download: " + $epHost + " fail (" + $_.Exception.Message + ") — trying next...")
         }
-        $sw.Stop()
-        try { $stream.Close() } catch {}
-        try { $resp.Close() } catch {}
-        $secs = $sw.Elapsed.TotalSeconds
-        if ($secs -le 0) { $secs = 0.001 }
-        $mbps = [Math]::Round(($total * 8) / 1MB / $secs, 1)
-        $mb   = [Math]::Round($total / 1MB, 2)
-        $secF = [Math]::Round($secs, 1)
-        Write-Host ("  Download: " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
-    } catch {
-        Write-Host ("  Download: FAILED (" + $_.Exception.Message + ")")
+    }
+    if (-not $downOk) {
+        Write-Host "  Download: all endpoints FAILED"
     }
 
-    # upload — 2 MB cap + 10s timeout (시간 cutoff, 작은 사이즈)
-    # 정확한 time-based upload 는 HttpWebRequest stream write 가 복잡 → 사이즈 cap 으로 대체.
-    # 10Mbps+ 이면 ~2초, 1Mbps 면 timeout 안에서 부분 측정 또는 fail.
+    # upload — 1 MB cap + 15s timeout. UA 명시. Cloudflare __up 차단 시 catch.
     try {
-        $upBytes = 2 * 1024 * 1024
+        $upBytes = 1 * 1024 * 1024
         $data = New-Object byte[] $upBytes
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 10
+        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 15 -UserAgent "Mozilla/5.0 check-site.ps1"
         $sw.Stop()
         $secs = $sw.Elapsed.TotalSeconds
         if ($secs -le 0) { $secs = 0.001 }
