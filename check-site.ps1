@@ -298,20 +298,36 @@ if ($Internet) {
         Write-Host "  Download: all endpoints FAILED"
     }
 
-    # upload — 1 MB cap + 15s timeout. UA 명시. Cloudflare __up 차단 시 catch.
-    try {
-        $upBytes = 1 * 1024 * 1024
-        $data = New-Object byte[] $upBytes
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 15 -UserAgent "Mozilla/5.0 check-site.ps1"
-        $sw.Stop()
-        $secs = $sw.Elapsed.TotalSeconds
-        if ($secs -le 0) { $secs = 0.001 }
-        $mbps = [Math]::Round(($upBytes * 8) / 1MB / $secs, 1)
-        $mb   = [Math]::Round($upBytes / 1MB, 2)
-        $secF = [Math]::Round($secs, 1)
-        Write-Host ("  Upload  : " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
-    } catch {
-        Write-Host ("  Upload  : FAILED (" + $_.Exception.Message + ")")
+    # upload — 128 KB cap + 30s timeout. UA 명시. endpoint fallback.
+    # 매우 느린 비대칭 회선(ADSL/모뎀급) 대응. Cloudflare __up 차단 시 httpbin/postman-echo 순차.
+    # 빠른 회선에선 0.1초 이내 (측정 노이즈 있지만 fail 보단 나음), 느린 회선에선 ~20초.
+    $upBytes = 128 * 1024
+    $data = New-Object byte[] $upBytes
+    $upEndpoints = @(
+        "https://speed.cloudflare.com/__up",
+        "https://httpbin.org/post",
+        "https://postman-echo.com/post"
+    )
+    $upOk = $false
+    foreach ($url in $upEndpoints) {
+        $epHost = ($url -split "/")[2]
+        try {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $null = Invoke-WebRequest -Uri $url -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 30 -UserAgent "Mozilla/5.0 check-site.ps1"
+            $sw.Stop()
+            $secs = $sw.Elapsed.TotalSeconds
+            if ($secs -le 0) { $secs = 0.001 }
+            $mbps = [Math]::Round(($upBytes * 8) / 1MB / $secs, 1)
+            $kb   = [Math]::Round($upBytes / 1KB, 0)
+            $secF = [Math]::Round($secs, 1)
+            Write-Host ("  Upload  : " + $mbps + " Mbps  (" + $kb + " KB in " + $secF + "s via " + $epHost + ")")
+            $upOk = $true
+            break
+        } catch {
+            Write-Host ("  Upload  : " + $epHost + " fail (" + $_.Exception.Message + ") — trying next...")
+        }
+    }
+    if (-not $upOk) {
+        Write-Host "  Upload  : all endpoints FAILED"
     }
 }
