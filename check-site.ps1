@@ -11,7 +11,8 @@
 #   - 단 vpn-ssh-setup 으로 SSH 셋업이 안 되는 Win7 은 사실상 접근 불가.
 
 param(
-    [switch]$Network   # 켜면 ETW(Kernel-Network) 5초 캡처로 프로세스별 송수신 KB 표시
+    [switch]$Network,  # 켜면 ETW(Kernel-Network) 5초 캡처로 프로세스별 송수신 KB 표시
+    [switch]$Internet  # 켜면 Cloudflare speed test (down 10MB / up 5MB) — 인터넷 속도 측정
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -226,5 +227,62 @@ if ($Network) {
         Stop-NetEventSession   $sessionName -EA SilentlyContinue
         Remove-NetEventSession $sessionName -EA SilentlyContinue
         Remove-Item $etl -Force -EA SilentlyContinue
+    }
+}
+
+# ── 7) [-Internet] Cloudflare speed test (down 10MB / up 5MB) — 인터넷 속도 ──
+# fast.com 과 동일 방식: 별도 도구 설치 없이 HTTP 다운로드/업로드 시간 측정.
+# speed.cloudflare.com 의 공개 endpoint(__down?bytes=N, __up) 사용 — anycast 라
+# 지리적으로 가까운 노드에 자동 라우팅 → 실제 인터넷 속도에 근접.
+if ($Internet) {
+    Write-Host ""
+    Write-Host "================ Internet Speed (Cloudflare) ================"
+    # TLS 1.2 강제 (Win7 PS 2.0 제외, Win8.1+ 는 가능). HTTPS endpoint 필수.
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+    # latency — ICMP ping (4회 평균)
+    try {
+        $ping = Test-Connection -ComputerName "speed.cloudflare.com" -Count 4 -EA Stop
+        $avgPing = [Math]::Round(($ping | Measure-Object ResponseTime -Average).Average, 0)
+        Write-Host ("  Latency : " + $avgPing + " ms (avg of 4 to speed.cloudflare.com)")
+    } catch {
+        Write-Host ("  Latency : FAILED (" + $_.Exception.Message + ")")
+    }
+
+    # download — 10 MB
+    try {
+        $downBytes = 10 * 1024 * 1024
+        $downUrl = "https://speed.cloudflare.com/__down?bytes=" + $downBytes
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $resp = Invoke-WebRequest -Uri $downUrl -UseBasicParsing -TimeoutSec 30
+        $sw.Stop()
+        $bytes = [long]$resp.RawContentLength
+        if ($bytes -le 0) { try { $bytes = [long]$resp.Content.Length } catch {} }
+        if ($bytes -le 0) { $bytes = $downBytes }
+        $secs = $sw.Elapsed.TotalSeconds
+        if ($secs -le 0) { $secs = 0.001 }
+        $mbps = [Math]::Round(($bytes * 8) / 1MB / $secs, 1)
+        $mb   = [Math]::Round($bytes / 1MB, 1)
+        $secF = [Math]::Round($secs, 2)
+        Write-Host ("  Download: " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
+    } catch {
+        Write-Host ("  Download: FAILED (" + $_.Exception.Message + ")")
+    }
+
+    # upload — 5 MB (zero-fill 더미)
+    try {
+        $upBytes = 5 * 1024 * 1024
+        $data = New-Object byte[] $upBytes
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 60
+        $sw.Stop()
+        $secs = $sw.Elapsed.TotalSeconds
+        if ($secs -le 0) { $secs = 0.001 }
+        $mbps = [Math]::Round(($upBytes * 8) / 1MB / $secs, 1)
+        $mb   = [Math]::Round($upBytes / 1MB, 1)
+        $secF = [Math]::Round($secs, 2)
+        Write-Host ("  Upload  : " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
+    } catch {
+        Write-Host ("  Upload  : FAILED (" + $_.Exception.Message + ")")
     }
 }
