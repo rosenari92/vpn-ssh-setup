@@ -120,7 +120,7 @@ Write-Host "================ Top Processes (CPU > 0.5% / Mem > 10MB / Disk > 1KB
 # ── 6) [-Network] ETW Kernel-Network 5초 캡처 → 프로세스별 송수신 KB ──
 if ($Network) {
     Write-Host ""
-    Write-Host "================ Network by Process (ETW Kernel-Network, 5s capture) ================"
+    Write-Host "================ Network by Process (ETW Kernel-Network, 3s capture) ================"
     # NetEventSession cmdlet 은 Windows 8.1 (Build 9600) / Server 2012 R2 부터.
     # Win7 / Win8 RTM 에서는 모듈 자체 부재 → skip.
     if ([int]$OS.BuildNumber -lt 9600) {
@@ -136,11 +136,12 @@ if ($Network) {
         Remove-NetEventSession $sessionName -EA SilentlyContinue
         Remove-Item $etl, $xml -Force -EA SilentlyContinue
 
-        # 세션 + provider + 5초 캡처
-        New-NetEventSession -Name $sessionName -LocalFilePath $etl -CaptureMode SaveToFile -EA Stop | Out-Null
+        # 세션 + provider + 3초 캡처 (이전 5초). MaxFileSize 50MB cap 으로
+        # 트래픽 폭증 사이트에서 .etl 파일 비대화 + Get-WinEvent 분석 시간 폭증 방지.
+        New-NetEventSession -Name $sessionName -LocalFilePath $etl -CaptureMode SaveToFile -MaxFileSize 50 -EA Stop | Out-Null
         Add-NetEventProvider -Name "Microsoft-Windows-Kernel-Network" -SessionName $sessionName -EA Stop | Out-Null
         Start-NetEventSession $sessionName
-        Start-Sleep -Seconds 5
+        Start-Sleep -Seconds 3
         Stop-NetEventSession $sessionName
         Remove-NetEventSession $sessionName
 
@@ -199,8 +200,8 @@ if ($Network) {
                     $p = Get-Process -Id $procId -EA SilentlyContinue
                     $procName[$procId] = if ($p) { $p.ProcessName } else { "PID:$procId" }
                 }
-                $sendKB = [Math]::Round($stats[$procId].Send / 1024 / 5, 2)   # 5초 → /s
-                $recvKB = [Math]::Round($stats[$procId].Recv / 1024 / 5, 2)
+                $sendKB = [Math]::Round($stats[$procId].Send / 1024 / 3, 2)   # 3초 → /s
+                $recvKB = [Math]::Round($stats[$procId].Recv / 1024 / 3, 2)
                 if ($sendKB -gt 0.05 -or $recvKB -gt 0.05) {
                     New-Object PSObject -Property @{
                         Process    = $procName[$procId]
@@ -230,57 +231,71 @@ if ($Network) {
     }
 }
 
-# ── 7) [-Internet] Cloudflare speed test (down 10MB / up 5MB) — 인터넷 속도 ──
-# fast.com 과 동일 방식: 별도 도구 설치 없이 HTTP 다운로드/업로드 시간 측정.
-# speed.cloudflare.com 의 공개 endpoint(__down?bytes=N, __up) 사용 — anycast 라
-# 지리적으로 가까운 노드에 자동 라우팅 → 실제 인터넷 속도에 근접.
+# ── 7) [-Internet] Cloudflare speed test (time-based, fast.com 방식) ──
+# 사이즈가 아니라 "시간" 으로 cutoff → 회선이 빠르든 느리든 측정 시간 일정.
+# Down 5초 / Up 3초 동안 흘러간 바이트로 Mbps 계산 → 빠른 회선엔 큰 샘플,
+# 느린 회선엔 작은 샘플로 자연 적응. 총 측정 ~10s (이전 최악 130s+).
 if ($Internet) {
     Write-Host ""
     Write-Host "================ Internet Speed (Cloudflare) ================"
     # TLS 1.2 강제 (Win7 PS 2.0 제외, Win8.1+ 는 가능). HTTPS endpoint 필수.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-    # latency — ICMP ping (4회 평균)
+    # latency — ICMP ping 2회 평균 (4회 → 2회 단축)
     try {
-        $ping = Test-Connection -ComputerName "speed.cloudflare.com" -Count 4 -EA Stop
+        $ping = Test-Connection -ComputerName "speed.cloudflare.com" -Count 2 -EA Stop
         $avgPing = [Math]::Round(($ping | Measure-Object ResponseTime -Average).Average, 0)
-        Write-Host ("  Latency : " + $avgPing + " ms (avg of 4 to speed.cloudflare.com)")
+        Write-Host ("  Latency : " + $avgPing + " ms (avg of 2 to speed.cloudflare.com)")
     } catch {
         Write-Host ("  Latency : FAILED (" + $_.Exception.Message + ")")
     }
 
-    # download — 10 MB
+    # download — 5초 time-based stream (HttpWebRequest + chunked read)
+    # 큰 endpoint(100MB) 요청하고 5초만 받음 → 빠른 회선이면 많이 받고, 느린 회선이면 부분만.
     try {
-        $downBytes = 10 * 1024 * 1024
-        $downUrl = "https://speed.cloudflare.com/__down?bytes=" + $downBytes
+        $downSecs = 5
+        $req = [System.Net.HttpWebRequest]::Create("https://speed.cloudflare.com/__down?bytes=104857600")
+        $req.Method = "GET"
+        $req.Timeout = ($downSecs + 5) * 1000        # connect/header timeout
+        $req.ReadWriteTimeout = ($downSecs + 5) * 1000
+        $req.AllowAutoRedirect = $true
+        $resp = $req.GetResponse()
+        $stream = $resp.GetResponseStream()
+        $buf = New-Object byte[] 65536
+        $total = [long]0
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $resp = Invoke-WebRequest -Uri $downUrl -UseBasicParsing -TimeoutSec 30
+        while ($sw.Elapsed.TotalSeconds -lt $downSecs) {
+            $n = $stream.Read($buf, 0, $buf.Length)
+            if ($n -le 0) { break }
+            $total += $n
+        }
         $sw.Stop()
-        $bytes = [long]$resp.RawContentLength
-        if ($bytes -le 0) { try { $bytes = [long]$resp.Content.Length } catch {} }
-        if ($bytes -le 0) { $bytes = $downBytes }
+        try { $stream.Close() } catch {}
+        try { $resp.Close() } catch {}
         $secs = $sw.Elapsed.TotalSeconds
         if ($secs -le 0) { $secs = 0.001 }
-        $mbps = [Math]::Round(($bytes * 8) / 1MB / $secs, 1)
-        $mb   = [Math]::Round($bytes / 1MB, 1)
-        $secF = [Math]::Round($secs, 2)
+        $mbps = [Math]::Round(($total * 8) / 1MB / $secs, 1)
+        $mb   = [Math]::Round($total / 1MB, 2)
+        $secF = [Math]::Round($secs, 1)
         Write-Host ("  Download: " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
     } catch {
         Write-Host ("  Download: FAILED (" + $_.Exception.Message + ")")
     }
 
-    # upload — 5 MB (zero-fill 더미)
+    # upload — 2 MB cap + 10s timeout (시간 cutoff, 작은 사이즈)
+    # 정확한 time-based upload 는 HttpWebRequest stream write 가 복잡 → 사이즈 cap 으로 대체.
+    # 10Mbps+ 이면 ~2초, 1Mbps 면 timeout 안에서 부분 측정 또는 fail.
     try {
-        $upBytes = 5 * 1024 * 1024
+        $upBytes = 2 * 1024 * 1024
         $data = New-Object byte[] $upBytes
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 60
+        $null = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__up" -Method Post -Body $data -ContentType "application/octet-stream" -UseBasicParsing -TimeoutSec 10
         $sw.Stop()
         $secs = $sw.Elapsed.TotalSeconds
         if ($secs -le 0) { $secs = 0.001 }
         $mbps = [Math]::Round(($upBytes * 8) / 1MB / $secs, 1)
-        $mb   = [Math]::Round($upBytes / 1MB, 1)
-        $secF = [Math]::Round($secs, 2)
+        $mb   = [Math]::Round($upBytes / 1MB, 2)
+        $secF = [Math]::Round($secs, 1)
         Write-Host ("  Upload  : " + $mbps + " Mbps  (" + $mb + " MB in " + $secF + "s)")
     } catch {
         Write-Host ("  Upload  : FAILED (" + $_.Exception.Message + ")")
